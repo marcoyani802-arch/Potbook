@@ -1,0 +1,17 @@
+{
+  "name": "POTBOOK — Pembukuan Meja Poker",
+  "short_name": "POTBOOK",
+  "description": "Catat buy-in, hitung chip, dan bagi transfer tanpa selisih.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#060910",
+  "theme_color": "#060910",
+  "lang": "id",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
