@@ -1,37 +1,4 @@
-<!doctype html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#060910">
-<meta name="description" content="Pembukuan meja poker: chip, buy-in, dan settlement tanpa selisih.">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="POTBOOK">
-<title>POTBOOK — Pembukuan meja, tanpa selisih</title>
-<link rel="manifest" href="manifest.json">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
-<style>
-  html,body{margin:0;padding:0;background:#060910}
-  #boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:14px;background:#060910;color:#7C8BA6;font-family:system-ui,sans-serif;font-size:12px;letter-spacing:.2em;z-index:99}
-  #boot .ring{width:44px;height:44px;border-radius:50%;border:2px solid #1E2B45;border-top-color:#22E4C8;
-    animation:spin .9s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  @media (prefers-reduced-motion:reduce){#boot .ring{animation:none}}
-</style>
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js" crossorigin></script>
-</head>
-<body>
-<div id="boot"><div class="ring"></div>MEMUAT MEJA</div>
-<div id="root"></div>
-
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useRef } = React;
-
+import React, { useState, useEffect, useMemo, useRef } from "react";
 
 /* ============================================================
    POTBOOK — Pembukuan meja poker, tanpa selisih
@@ -264,7 +231,7 @@ function Sheet({ title, sub, onClose, children }) {
 }
 
 /* ============================================================ */
-function App() {
+export default function App() {
   const [tab, setTab] = useState("meja");
   const [cloud, setCloud] = useState("checking");
   const [roster, setRoster] = useState([]);
@@ -2021,33 +1988,3 @@ button.big{padding:16px;font-size:14.5px}
   .felt{inset:16% 8%}
 }
 `;
-
-
-ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
-</script>
-
-<script>
-  // Sembunyikan layar boot setelah React sempat render
-  var tries = 0;
-  var t = setInterval(function () {
-    tries++;
-    var r = document.getElementById('root');
-    if (r && r.childElementCount > 0) {
-      var b = document.getElementById('boot');
-      if (b) b.remove();
-      clearInterval(t);
-    } else if (tries > 120) {
-      var b2 = document.getElementById('boot');
-      if (b2) b2.innerHTML = 'GAGAL MEMUAT — periksa koneksi lalu muat ulang';
-      clearInterval(t);
-    }
-  }, 100);
-
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () {});
-    });
-  }
-</script>
-</body>
-</html>

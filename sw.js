@@ -1,5 +1,5 @@
 /* POTBOOK service worker — network-first supaya update selalu terpasang */
-const VERSION = 'potbook-v2';
+const VERSION = 'potbook-v3';
 const SHELL = [
   './',
   './index.html',
