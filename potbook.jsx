@@ -53,6 +53,42 @@ const HANDS = [
   { rank: 10, en: "High Card", id: "Kartu Tertinggi", cards: ["A♠", "J♥", "8♦", "5♣", "2♠"], desc: "Tidak ada kombinasi. Kartu tertinggi yang bicara.", odds: "1 : 1" },
 ];
 
+/* ---------- avatar ---------- */
+const AVATARS = [
+  { id: "lion", glyph: "🦁", name: "Singa" },
+  { id: "tiger", glyph: "🐯", name: "Harimau" },
+  { id: "wolf", glyph: "🐺", name: "Serigala" },
+  { id: "fox", glyph: "🦊", name: "Rubah" },
+  { id: "bear", glyph: "🐻", name: "Beruang" },
+  { id: "panda", glyph: "🐼", name: "Panda" },
+  { id: "monkey", glyph: "🐵", name: "Monyet" },
+  { id: "cat", glyph: "😼", name: "Kucing" },
+  { id: "frog", glyph: "🐸", name: "Katak" },
+  { id: "shark", glyph: "🦈", name: "Hiu" },
+  { id: "octopus", glyph: "🐙", name: "Gurita" },
+  { id: "eagle", glyph: "🦅", name: "Elang" },
+  { id: "dragon", glyph: "🐲", name: "Naga" },
+  { id: "ogre", glyph: "👹", name: "Oni" },
+  { id: "tengu", glyph: "👺", name: "Tengu" },
+  { id: "robot", glyph: "🤖", name: "Robot" },
+  { id: "alien", glyph: "👽", name: "Alien" },
+  { id: "skull", glyph: "💀", name: "Tengkorak" },
+];
+const avaOf = (seed) => AVATARS.find((a) => a.id === seed) || null;
+
+function Ava({ seed, name, size = 44 }) {
+  const a = avaOf(seed);
+  const initials = (name || "?").slice(0, 2).toUpperCase();
+  return (
+    <span
+      className="ava"
+      style={{ width: size, height: size, fontSize: a ? size * 0.52 : size * 0.32 }}
+    >
+      {a ? a.glyph : initials}
+    </span>
+  );
+}
+
 /* ---------- helpers ---------- */
 const uid = () =>
   "x" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -235,11 +271,13 @@ export default function App() {
       const inChips = s.buyins.reduce((a, b) => a + Number(b.chips), 0);
       const outChips = s.final === null ? null : s.final;
       return {
+        key: s.key,
         seatNo: s.seatNo,
         id: s.playerId,
         name: s.name,
-        bank: s.bank,
-        acct: s.acct,
+        avatar: s.avatar,
+        out: s.status === "out",
+        leftAt: s.leftAt,
         buyins: s.buyins,
         inChips,
         outChips,
@@ -264,9 +302,27 @@ export default function App() {
     });
 
     const residual = adjusted.reduce((a, r) => a + r.netChips, 0);
+
+    /* Pemain yang sudah keluar diselesaikan tunai lewat kasir saat itu juga.
+       Kas kasir jadi berkurang/bertambah, dan itu harus ditagih balik di
+       settlement akhir. bankerAdjust = jumlah net semua pemain yang keluar. */
+    const gone = adjusted.filter((r) => r.out);
+    const staying = adjusted.filter((r) => !r.out);
+    const bankerAdjust = gone.reduce((a, r) => a + r.net, 0);
+
+    const winners = adjusted.filter((r) => r.outChips !== null && r.net > 0);
+    const losers = adjusted.filter((r) => r.outChips !== null && r.net < 0);
+    const evens = adjusted.filter((r) => r.outChips !== null && r.net === 0);
+
     return {
       rate,
       rows: adjusted,
+      gone,
+      staying,
+      bankerAdjust,
+      winners,
+      losers,
+      evens,
       totalIn,
       totalOut,
       variance,
@@ -280,33 +336,64 @@ export default function App() {
   const balanced = stats.variance === 0 || (stats.variance !== null && session.adjust !== "none");
 
   /* ---- aksi meja ---- */
-  const seatPlayer = (seatNo, player) => {
+  const seatPlayer = (seatNo, player, openingChips) => {
+    const key = uid();
     setSession((s) => ({
       ...s,
       seats: [
         ...s.seats,
         {
+          key,
           seatNo,
           playerId: player.id,
           name: player.name,
-          bank: player.bank_name || "",
-          acct: player.bank_account || "",
-          buyins: [],
+          avatar: player.avatar_seed || null,
+          buyins:
+            openingChips > 0
+              ? [
+                  {
+                    id: uid(),
+                    chips: Number(openingChips),
+                    kind: "buyin",
+                    at: new Date().toISOString(),
+                  },
+                ]
+              : [],
           final: null,
           breakdown: {},
+          status: "playing",
+          leftAt: null,
         },
       ].sort((a, b) => a.seatNo - b.seatNo),
     }));
   };
 
-  const standUp = (seatNo) =>
-    setSession((s) => ({ ...s, seats: s.seats.filter((x) => x.seatNo !== seatNo) }));
-
-  const addBuyin = (seatNo, chips, kind) =>
+  /* Pemain keluar tengah sesi: chip dikunci, kursi dikosongkan,
+     tapi catatannya tetap tinggal di buku supaya balance tidak bocor. */
+  const cashOut = (key, total, breakdown) =>
     setSession((s) => ({
       ...s,
       seats: s.seats.map((x) =>
-        x.seatNo === seatNo
+        x.key === key
+          ? {
+              ...x,
+              final: total,
+              breakdown: breakdown || {},
+              status: "out",
+              leftAt: new Date().toISOString(),
+            }
+          : x
+      ),
+    }));
+
+  const removeSeat = (key) =>
+    setSession((s) => ({ ...s, seats: s.seats.filter((x) => x.key !== key) }));
+
+  const addBuyin = (key, chips, kind) =>
+    setSession((s) => ({
+      ...s,
+      seats: s.seats.map((x) =>
+        x.key === key
           ? {
               ...x,
               buyins: [
@@ -318,26 +405,24 @@ export default function App() {
       ),
     }));
 
-  const dropBuyin = (seatNo, bid) =>
+  const dropBuyin = (key, bid) =>
     setSession((s) => ({
       ...s,
       seats: s.seats.map((x) =>
-        x.seatNo === seatNo ? { ...x, buyins: x.buyins.filter((b) => b.id !== bid) } : x
+        x.key === key ? { ...x, buyins: x.buyins.filter((b) => b.id !== bid) } : x
       ),
     }));
 
-  const setFinal = (seatNo, breakdown) =>
+  const setFinal = (key, total, breakdown) =>
     setSession((s) => ({
       ...s,
       seats: s.seats.map((x) =>
-        x.seatNo === seatNo
-          ? { ...x, breakdown, final: breakdownTotal(breakdown) }
-          : x
+        x.key === key ? { ...x, breakdown: breakdown || {}, final: total } : x
       ),
     }));
 
-  const addPlayer = async (name, bank, acct) => {
-    const row = { name, bank_name: bank || null, bank_account: acct || null };
+  const addPlayer = async (name, avatar) => {
+    const row = { name, avatar_seed: avatar || null };
     if (cloud === "online") {
       try {
         const res = await sbInsert("players", [row]);
@@ -355,7 +440,13 @@ export default function App() {
 
   /* ---- settlement ---- */
   const lockAndSettle = () => {
-    const nets = stats.rows.map((r) => ({ id: r.id, net: r.net }));
+    /* Hanya pemain yang masih di meja yang ikut settlement akhir.
+       Yang sudah keluar sudah lunas dengan kasir. Selisih kas kasir
+       dibebankan ke net kasir supaya totalnya tetap nol. */
+    const nets = stats.staying.map((r) => ({
+      id: r.id,
+      net: r.net + (r.id === session.bankerId ? stats.bankerAdjust : 0),
+    }));
     const list =
       session.mode === "banker" && session.bankerId
         ? bankerTransfers(nets, session.bankerId)
@@ -398,6 +489,7 @@ export default function App() {
           final_chips: s.final,
           final_breakdown: s.breakdown,
           counted_at: s.final === null ? null : new Date().toISOString(),
+          left_at: s.leftAt,
         }));
       const sp = spRows.length ? await sbInsert("session_players", spRows) : [];
       const map = {};
@@ -427,7 +519,28 @@ export default function App() {
           amount_idr: t.amount,
           mode: session.mode,
           is_paid: !!paid[t.from + t.to],
+          is_cashout: false,
         }));
+
+      /* Cash-out tengah sesi dicatat terpisah, sudah lunas saat pemain pulang */
+      if (session.bankerId && map[session.bankerId]) {
+        session.seats
+          .filter((sp) => sp.status === "out" && map[sp.playerId])
+          .forEach((sp) => {
+            const r = stats.rows.find((x) => x.key === sp.key);
+            if (!r || Math.abs(r.net) < 1) return;
+            stRows.push({
+              session_id: sid,
+              from_player_id: r.net > 0 ? session.bankerId : sp.playerId,
+              to_player_id: r.net > 0 ? sp.playerId : session.bankerId,
+              amount_idr: Math.round(Math.abs(r.net)),
+              mode: "banker",
+              is_paid: true,
+              is_cashout: true,
+              note: "Cash out tengah sesi",
+            });
+          });
+      }
       if (stRows.length) await sbInsert("settlements", stRows);
       setSession((s) => ({ ...s, status: "closed" }));
       flash("Sesi tersimpan ke cloud");
@@ -487,7 +600,8 @@ export default function App() {
             stats={stats}
             roster={roster}
             onSeat={seatPlayer}
-            onStand={standUp}
+            onCashOut={cashOut}
+            onRemove={removeSeat}
             onBuyin={addBuyin}
             onFinal={setFinal}
             onAddPlayer={addPlayer}
@@ -560,7 +674,8 @@ function TableView({
   stats,
   roster,
   onSeat,
-  onStand,
+  onCashOut,
+  onRemove,
   onBuyin,
   onFinal,
   onAddPlayer,
@@ -569,16 +684,17 @@ function TableView({
 }) {
   const seats = [];
   for (let i = 1; i <= session.maxSeats; i += 1) {
-    const occ = session.seats.find((s) => s.seatNo === i);
+    const occ = session.seats.find((s) => s.seatNo === i && s.status === "playing");
     seats.push({ seatNo: i, occ });
   }
+  const banker = stats.rows.find((r) => r.id === session.bankerId) || null;
 
   const pos = (i, total) => {
     const a = (Math.PI * 2 * (i - 1)) / total - Math.PI / 2;
     return { left: 50 + 43 * Math.cos(a) + "%", top: 50 + 40 * Math.sin(a) + "%" };
   };
 
-  const rowFor = (id) => stats.rows.find((r) => r.id === id);
+  const rowFor = (key) => stats.rows.find((r) => r.key === key);
   const potChips = stats.totalIn;
 
   return (
@@ -614,6 +730,21 @@ function TableView({
         </label>
       </div>
 
+      <label className="banker-pick">
+        <span>Kasir — pemegang uang tunai</span>
+        <select
+          value={session.bankerId || ""}
+          onChange={(e) => setSession((s) => ({ ...s, bankerId: e.target.value || null }))}
+        >
+          <option value="">— belum ditentukan —</option>
+          {stats.rows.filter((r) => !r.out).map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
       <div className={"felt-wrap" + (stats.variance !== null && stats.variance !== 0 ? " off" : stats.allCounted ? " ok" : "")}>
         <div className="felt">
           <div className="felt-core">
@@ -629,7 +760,7 @@ function TableView({
         </div>
 
         {seats.map((s) => {
-          const r = s.occ ? rowFor(s.occ.playerId) : null;
+          const r = s.occ ? rowFor(s.occ.key) : null;
           const style = pos(s.seatNo, session.maxSeats);
           if (!s.occ)
             return (
@@ -652,7 +783,7 @@ function TableView({
               style={style}
               onClick={() => setModal({ type: "player", seatNo: s.seatNo })}
             >
-              <span className="ava">{s.occ.name.slice(0, 2).toUpperCase()}</span>
+              <Ava seed={s.occ.avatar} name={s.occ.name} size={44} />
               <em className="nm">{s.occ.name.split(" ")[0]}</em>
               <em className="mn">
                 {r && r.outChips !== null ? signed(net) : num(r ? r.inChips : 0) + " chip"}
@@ -677,8 +808,34 @@ function TableView({
         </div>
       </div>
 
+      {stats.gone.length ? (
+        <>
+          <h2 className="sec">Sudah pulang</h2>
+          <div className="gone-list">
+            {stats.gone.map((g) => (
+              <div key={g.key} className="gone">
+                <Ava seed={g.avatar} name={g.name} size={30} />
+                <div className="gone-main">
+                  <b>{g.name}</b>
+                  <em>{num(g.outChips)} chip ditukar</em>
+                </div>
+                <span className={"gone-net " + (g.net >= 0 ? "up" : "down")}>
+                  {g.net > 0 ? "cash out " : g.net < 0 ? "bayar " : "impas "}
+                  {g.net === 0 ? "" : rp(g.net)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="kas">
+            Kas kasir {stats.bankerAdjust > 0 ? "berkurang" : stats.bankerAdjust < 0 ? "bertambah" : "tetap"}{" "}
+            <b>{rp(stats.bankerAdjust)}</b> — ditagih balik saat settlement akhir.
+          </div>
+        </>
+      ) : null}
+
       <p className="hint">
-        Tap kursi kosong untuk mendudukkan pemain. Tap pemain untuk rebuy atau hitung chip akhirnya.
+        Tap kursi kosong untuk mendudukkan pemain. Tap pemain untuk rebuy, hitung chip, atau
+        menyelesaikan kepulangannya.
       </p>
 
       {modal && modal.type === "sit" ? (
@@ -687,8 +844,7 @@ function TableView({
           roster={roster}
           taken={session.seats.map((s) => s.playerId)}
           onPick={(p, chips) => {
-            onSeat(modal.seatNo, p);
-            if (chips > 0) setTimeout(() => onBuyin(modal.seatNo, chips, "buyin"), 0);
+            onSeat(modal.seatNo, p, chips);
             setModal(null);
           }}
           onAddPlayer={onAddPlayer}
@@ -696,15 +852,17 @@ function TableView({
         />
       ) : null}
 
-      {modal && modal.type === "player" ? (
+      {modal && modal.type === "player" && session.seats.find((s) => s.key === modal.key) ? (
         <PlayerSheet
-          seat={session.seats.find((s) => s.seatNo === modal.seatNo)}
-          row={rowFor(session.seats.find((s) => s.seatNo === modal.seatNo).playerId)}
+          seat={session.seats.find((s) => s.key === modal.key)}
+          row={stats.rows.find((r) => r.key === modal.key)}
           rate={stats.rate}
-          onBuyin={(c, k) => onBuyin(modal.seatNo, c, k)}
-          onFinal={(bd) => onFinal(modal.seatNo, bd)}
-          onStand={() => {
-            onStand(modal.seatNo);
+          banker={banker}
+          onBuyin={(c, k) => onBuyin(modal.key, c, k)}
+          onFinal={(t, bd) => onFinal(modal.key, t, bd)}
+          onCashOut={(t, bd) => onCashOut(modal.key, t, bd)}
+          onRemove={() => {
+            onRemove(modal.key);
             setModal(null);
           }}
           onClose={() => setModal(null)}
@@ -718,8 +876,7 @@ function TableView({
 function SitSheet({ seatNo, roster, taken, onPick, onAddPlayer, onClose }) {
   const [chips, setChips] = useState(100);
   const [newName, setNewName] = useState("");
-  const [bank, setBank] = useState("");
-  const [acct, setAcct] = useState("");
+  const [seed, setSeed] = useState(null);
   const [adding, setAdding] = useState(false);
   const free = roster.filter((p) => !taken.includes(p.id));
 
@@ -749,10 +906,9 @@ function SitSheet({ seatNo, roster, taken, onPick, onAddPlayer, onClose }) {
             ) : null}
             {free.map((p) => (
               <button key={p.id} className="rowbtn" onClick={() => onPick(p, chips)}>
-                <span className="ava sm">{p.name.slice(0, 2).toUpperCase()}</span>
+                <Ava seed={p.avatar_seed} name={p.name} size={34} />
                 <span className="rb-main">
                   <b>{p.name}</b>
-                  {p.bank_name ? <em>{p.bank_name} · {p.bank_account}</em> : <em>Belum ada rekening</em>}
                 </span>
                 <span className="go">Dudukkan</span>
               </button>
@@ -769,12 +925,20 @@ function SitSheet({ seatNo, roster, taken, onPick, onAddPlayer, onClose }) {
             <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Nama pemain" />
           </label>
           <label>
-            <span>Bank</span>
-            <input value={bank} onChange={(e) => setBank(e.target.value)} placeholder="BCA / Mandiri / OVO" />
-          </label>
-          <label>
-            <span>Nomor rekening</span>
-            <input value={acct} onChange={(e) => setAcct(e.target.value)} placeholder="Untuk tombol salin saat transfer" />
+            <span>Avatar</span>
+            <div className="ava-grid">
+              {AVATARS.map((a) => (
+                <button
+                  key={a.id}
+                  className={"ava-pick" + (seed === a.id ? " on" : "")}
+                  onClick={() => setSeed(seed === a.id ? null : a.id)}
+                  title={a.name}
+                  aria-label={a.name}
+                >
+                  <Ava seed={a.id} name={newName} size={38} />
+                </button>
+              ))}
+            </div>
           </label>
           <div className="row2">
             <button className="ghost" onClick={() => setAdding(false)}>
@@ -784,7 +948,7 @@ function SitSheet({ seatNo, roster, taken, onPick, onAddPlayer, onClose }) {
               className="primary"
               disabled={!newName.trim()}
               onClick={async () => {
-                const p = await onAddPlayer(newName.trim(), bank.trim(), acct.trim());
+                const p = await onAddPlayer(newName.trim(), seed);
                 onPick(p, chips);
               }}
             >
@@ -798,22 +962,83 @@ function SitSheet({ seatNo, roster, taken, onPick, onAddPlayer, onClose }) {
 }
 
 /* ---------- sheet: detail pemain ---------- */
-function PlayerSheet({ seat, row, rate, onBuyin, onFinal, onStand, onClose }) {
+function PlayerSheet({ seat, row, rate, banker, onBuyin, onFinal, onCashOut, onRemove, onClose }) {
   const [mode, setMode] = useState("rebuy");
   const [chips, setChips] = useState(100);
+  const [entry, setEntry] = useState("denom");
   const [bd, setBd] = useState(seat.breakdown || {});
-  const total = breakdownTotal(bd);
+  const [tot, setTot] = useState(seat.final === null ? "" : String(seat.final));
 
-  const bump = (v, delta) =>
-    setBd((b) => {
-      const next = Math.max(0, (Number(b[v]) || 0) + delta);
-      return { ...b, [v]: next };
-    });
+  const total = entry === "denom" ? breakdownTotal(bd) : Math.max(0, Number(tot) || 0);
+  const net = (total - row.inChips) * rate;
+  const bump = (v, d) =>
+    setBd((b) => ({ ...b, [v]: Math.max(0, (Number(b[v]) || 0) + d) }));
+
+  const counter = (
+    <>
+      <div className="segs sub">
+        <button className={entry === "denom" ? "on" : ""} onClick={() => setEntry("denom")}>
+          Hitung per warna
+        </button>
+        <button className={entry === "total" ? "on" : ""} onClick={() => setEntry("total")}>
+          Isi total langsung
+        </button>
+      </div>
+
+      {entry === "denom" ? (
+        <div className="counter">
+          {DENOMS.map((d) => (
+            <div key={d.value} className="cnt-row">
+              <Chip d={d} size={32} />
+              <span className="cnt-label">{d.label}</span>
+              <button onClick={() => bump(d.value, -1)}>−</button>
+              <input
+                type="number"
+                value={bd[d.value] || 0}
+                onChange={(e) =>
+                  setBd((b) => ({ ...b, [d.value]: Math.max(0, Number(e.target.value) || 0) }))
+                }
+              />
+              <button onClick={() => bump(d.value, 1)}>+</button>
+              <b>{num((Number(bd[d.value]) || 0) * d.value)}</b>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="field">
+          <span>Total chip tersisa</span>
+          <input
+            className="bigin"
+            type="number"
+            value={tot}
+            placeholder="0"
+            onChange={(e) => setTot(e.target.value)}
+          />
+          <p className="sub-note">Setara {rp(total * rate)}</p>
+        </div>
+      )}
+
+      <div className="count-total">
+        <div>
+          <span>Sisa chip</span>
+          <b>{num(total)}</b>
+        </div>
+        <div>
+          <span>Nilai</span>
+          <b className="gold">{rp(total * rate)}</b>
+        </div>
+        <div>
+          <span>Net</span>
+          <b className={net >= 0 ? "up" : "down"}>{signed(net)}</b>
+        </div>
+      </div>
+    </>
+  );
 
   return (
     <Sheet
       title={seat.name}
-      sub={"Kursi " + seat.seatNo + " · masuk " + num(row.inChips) + " chip"}
+      sub={"Kursi " + seat.seatNo + " · beli " + num(row.inChips) + " chip · " + rp(row.inIdr)}
       onClose={onClose}
     >
       <div className="segs">
@@ -821,7 +1046,10 @@ function PlayerSheet({ seat, row, rate, onBuyin, onFinal, onStand, onClose }) {
           Rebuy
         </button>
         <button className={mode === "count" ? "on" : ""} onClick={() => setMode("count")}>
-          Hitung chip akhir
+          Hitung chip
+        </button>
+        <button className={mode === "out" ? "on" : ""} onClick={() => setMode("out")}>
+          Keluar
         </button>
       </div>
 
@@ -835,7 +1063,11 @@ function PlayerSheet({ seat, row, rate, onBuyin, onFinal, onStand, onClose }) {
                   {c}
                 </button>
               ))}
-              <input type="number" value={chips} onChange={(e) => setChips(Number(e.target.value) || 0)} />
+              <input
+                type="number"
+                value={chips}
+                onChange={(e) => setChips(Number(e.target.value) || 0)}
+              />
             </div>
           </div>
           <div className="row2">
@@ -851,63 +1083,75 @@ function PlayerSheet({ seat, row, rate, onBuyin, onFinal, onStand, onClose }) {
             {row.buyins.map((b, i) => (
               <div key={b.id} className="ml-row">
                 <em>{i + 1}</em>
-                <span>{b.kind}</span>
+                <span>{i === 0 ? "buy-in" : b.kind}</span>
                 <b>{num(b.chips)} chip</b>
                 <i>{rp(b.chips * rate)}</i>
               </div>
             ))}
           </div>
-          <button className="danger full" onClick={onStand}>
-            Keluarkan dari kursi
-          </button>
+          {row.buyins.length === 0 ? (
+            <button className="danger full" onClick={onRemove}>
+              Batalkan, pemain belum main
+            </button>
+          ) : null}
         </>
-      ) : (
+      ) : null}
+
+      {mode === "count" ? (
         <>
-          <div className="counter">
-            {DENOMS.map((d) => (
-              <div key={d.value} className="cnt-row">
-                <Chip d={d} size={34} />
-                <span className="cnt-label">{d.label}</span>
-                <button onClick={() => bump(d.value, -1)}>−</button>
-                <input
-                  type="number"
-                  value={bd[d.value] || 0}
-                  onChange={(e) =>
-                    setBd((b) => ({ ...b, [d.value]: Math.max(0, Number(e.target.value) || 0) }))
-                  }
-                />
-                <button onClick={() => bump(d.value, 1)}>+</button>
-                <b>{num((Number(bd[d.value]) || 0) * d.value)}</b>
-              </div>
-            ))}
-          </div>
-          <div className="count-total">
-            <div>
-              <span>Total chip</span>
-              <b>{num(total)}</b>
-            </div>
-            <div>
-              <span>Nilai</span>
-              <b className="gold">{rp(total * rate)}</b>
-            </div>
-            <div>
-              <span>Net</span>
-              <b className={total - row.inChips >= 0 ? "up" : "down"}>
-                {signed((total - row.inChips) * rate)}
-              </b>
-            </div>
-          </div>
+          {counter}
           <button
             className="primary full"
             onClick={() => {
-              onFinal(bd);
+              onFinal(total, entry === "denom" ? bd : {});
               onClose();
             }}
           >
             Kunci hitungan
           </button>
+          <p className="sub-note center">Pemain tetap duduk. Untuk pulang, pakai tab Keluar.</p>
         </>
-      )}
+      ) : null}
+
+      {mode === "out" ? (
+        <>
+          {counter}
+
+          <div className={"verdict " + (net > 0 ? "up" : net < 0 ? "down" : "flat")}>
+            <div className="v-head">
+              {net > 0 ? "CASH OUT" : net < 0 ? "HARUS BAYAR" : "IMPAS"}
+              <b>{signed(net)}</b>
+            </div>
+            <p>
+              {net > 0
+                ? "Kasir " + (banker ? banker.name : "—") + " tukar " + num(total) +
+                  " chip milik " + seat.name + " jadi uang tunai " + rp(net) + "."
+                : net < 0
+                ? seat.name + " transfer " + rp(-net) + " ke kasir " +
+                  (banker ? banker.name : "—") + ", lalu chipnya dikembalikan."
+                : seat.name + " pulang impas. Chip dikembalikan, tidak ada uang berpindah."}
+            </p>
+          </div>
+
+          {!banker ? (
+            <p className="warn">Tentukan kasir dulu di bagian atas tab Meja.</p>
+          ) : null}
+
+          <button
+            className="primary full"
+            disabled={!banker}
+            onClick={() => {
+              onCashOut(total, entry === "denom" ? bd : {});
+              onClose();
+            }}
+          >
+            Selesaikan &amp; kosongkan kursi
+          </button>
+          <p className="sub-note center">
+            Catatannya tetap tersimpan di buku, jadi balance akhir tidak bergeser.
+          </p>
+        </>
+      ) : null}
     </Sheet>
   );
 }
@@ -971,9 +1215,9 @@ function LedgerView({ session, setSession, stats, balanced, onDropBuyin, onLock 
       <div className="ledger">
         {stats.rows.length === 0 ? <p className="empty">Meja masih kosong.</p> : null}
         {stats.rows.map((r) => (
-          <div key={r.id} className="lg-card">
+          <div key={r.key} className="lg-card">
             <div className="lg-head">
-              <span className="ava sm">{r.name.slice(0, 2).toUpperCase()}</span>
+              <Ava seed={r.avatar} name={r.name} size={34} />
               <div className="lg-name">
                 <b>{r.name}</b>
                 <em>Kursi {r.seatNo} · {r.buyins.length}× beli chip</em>
@@ -999,7 +1243,7 @@ function LedgerView({ session, setSession, stats, balanced, onDropBuyin, onLock 
                 <button
                   key={b.id}
                   className="tag"
-                  onClick={() => onDropBuyin(r.seatNo, b.id)}
+                  onClick={() => onDropBuyin(r.key, b.id)}
                   title="Tap untuk hapus"
                 >
                   {i === 0 ? "buy-in" : b.kind} {num(b.chips)} ✕
@@ -1048,8 +1292,77 @@ function SettleView({
     document.body.removeChild(ta);
   };
 
+  const w = stats.winners.length;
+  const l = stats.losers.length;
+  const e = stats.evens.length;
+  const totalLoss = stats.losers.reduce((a, r) => a + Math.abs(r.net), 0);
+
   return (
     <div className="pad">
+      <h2 className="sec">Rekap sesi</h2>
+
+      {!stats.allCounted ? (
+        <p className="empty">
+          Masih ada pemain yang chipnya belum dihitung. Selesaikan di tab Meja dulu.
+        </p>
+      ) : (
+        <>
+          <div className="tally">
+            <div className="ty up">
+              <b>{w}</b>
+              <span>menang</span>
+            </div>
+            <div className="ty down">
+              <b>{l}</b>
+              <span>rugi &amp; harus bayar</span>
+            </div>
+            <div className="ty">
+              <b>{e}</b>
+              <span>impas</span>
+            </div>
+          </div>
+
+          <div className="tally">
+            <div className="ty wide">
+              <b className="gold">{rp(stats.totalInIdr)}</b>
+              <span>uang berputar</span>
+            </div>
+            <div className="ty wide">
+              <b className="down">{rp(totalLoss)}</b>
+              <span>total yang harus dibayar</span>
+            </div>
+          </div>
+
+          <div className="standing">
+            {stats.rows
+              .slice()
+              .sort((a, b) => b.net - a.net)
+              .map((r) => (
+                <div key={r.key} className="st-row">
+                  <Ava seed={r.avatar} name={r.name} size={30} />
+                  <div className="st-main">
+                    <b>{r.name}</b>
+                    <em>
+                      {r.out ? "sudah pulang · " : ""}
+                      {num(r.inChips)} → {num(r.outChips === null ? 0 : r.outChips)} chip
+                    </em>
+                  </div>
+                  <span className={"st-net " + (r.net > 0 ? "up" : r.net < 0 ? "down" : "")}>
+                    {signed(r.net)}
+                  </span>
+                </div>
+              ))}
+          </div>
+
+          {stats.gone.length ? (
+            <p className="sub-note">
+              {stats.gone.length} pemain sudah diselesaikan tunai lewat kasir saat pulang.
+              Selisih kas {rp(stats.bankerAdjust)} sudah dimasukkan ke hitungan kasir di bawah.
+            </p>
+          ) : null}
+        </>
+      )}
+
       <h2 className="sec">Pola settlement</h2>
       <div className="segs">
         <button
@@ -1083,7 +1396,17 @@ function SettleView({
         </div>
       ) : null}
 
-      <button className="ghost full" onClick={onLock} disabled={!stats.allCounted}>
+      {stats.gone.length && !session.bankerId ? (
+        <p className="warn">
+          Ada pemain yang sudah pulang, jadi kasir wajib ditentukan supaya kasnya bisa ditagih.
+        </p>
+      ) : null}
+
+      <button
+        className="ghost full"
+        onClick={onLock}
+        disabled={!stats.allCounted || (stats.gone.length > 0 && !session.bankerId)}
+      >
         Hitung ulang transfer
       </button>
 
@@ -1099,27 +1422,29 @@ function SettleView({
       <div className="transfers">
         {settlements.map((t) => {
           const key = t.from + t.to;
+          const from = rowOf(t.from);
           const to = rowOf(t.to);
           return (
             <div key={key} className={"tf" + (paid[key] ? " done" : "")}>
               <div className="tf-flow">
-                <span className="ava sm">{nameOf(t.from).slice(0, 2).toUpperCase()}</span>
+                <Ava seed={from ? from.avatar : null} name={nameOf(t.from)} size={38} />
                 <div className="tf-arrow">
                   <b>{rp(t.amount)}</b>
                   <i />
                 </div>
-                <span className="ava sm to">{nameOf(t.to).slice(0, 2).toUpperCase()}</span>
+                <Ava seed={to ? to.avatar : null} name={nameOf(t.to)} size={38} />
               </div>
               <div className="tf-names">
                 <b>{nameOf(t.from)}</b>
                 <span>transfer ke</span>
                 <b>{nameOf(t.to)}</b>
               </div>
-              {to && to.acct ? (
-                <button className="acct" onClick={() => copy(to.acct)}>
-                  {to.bank} · {to.acct} <em>salin</em>
-                </button>
-              ) : null}
+              <button
+                className="ghost sm-btn"
+                onClick={() => copy(nameOf(t.from) + " → " + nameOf(t.to) + ": " + rp(t.amount))}
+              >
+                Salin rincian
+              </button>
               <button
                 className={"mark" + (paid[key] ? " on" : "")}
                 onClick={() => setPaid((p) => ({ ...p, [key]: !p[key] }))}
@@ -1353,10 +1678,15 @@ main{max-width:560px;margin:0 auto}
 /* ledger */
 .lg-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px;margin-bottom:10px}
 .lg-head{display:flex;align-items:center;gap:10px}
-.ava.sm{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-family:'Chakra Petch';font-weight:700;font-size:12px;flex:none;
-  background:linear-gradient(150deg,#1B2A44,#0E1626);border:1px solid #2C3D5C}
-.ava.sm.to{border-color:var(--neon)}
+.ava{border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;
+  font-family:'Chakra Petch','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;
+  font-weight:700;letter-spacing:.03em;line-height:1;
+  background:linear-gradient(150deg,#1B2A44,#0E1626);
+  border:1.5px solid #2C3D5C;box-shadow:0 4px 12px rgba(0,0,0,.45)}
+.ava-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
+.ava-pick{background:none;border:1.5px solid transparent;border-radius:14px;padding:3px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:.45;transition:opacity .18s}
+.ava-pick.on{opacity:1;border-color:var(--neon);background:rgba(34,228,200,.1)}
 .lg-name{flex:1;min-width:0}
 .lg-name b{display:block;font-size:14px}
 .lg-name em{font-size:11px;color:var(--mut)}
@@ -1382,10 +1712,7 @@ main{max-width:560px;margin:0 auto}
   background:linear-gradient(90deg,transparent,var(--viol),var(--neon))}
 .tf-names{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:9px;font-size:12.5px}
 .tf-names span{color:var(--mut);font-size:11px}
-.acct{width:100%;margin-top:10px;background:rgba(255,255,255,.04);border:1px solid var(--line);
-  border-radius:10px;padding:9px 12px;font-family:'JetBrains Mono',monospace;font-size:11.5px;
-  display:flex;justify-content:space-between;align-items:center;cursor:pointer}
-.acct em{color:var(--neon);font-family:'Sora';font-size:11px}
+button.sm-btn{width:100%;margin-top:10px;padding:9px;font-size:11.5px;color:var(--mut)}
 .mark{width:100%;margin-top:9px;background:none;border:1px solid var(--line);border-radius:10px;
   padding:10px;font-size:12.5px;cursor:pointer;color:var(--mut)}
 .mark.on{border-color:var(--neon);color:var(--neon);background:rgba(34,228,200,.08)}
@@ -1511,6 +1838,62 @@ button.big{padding:16px;font-size:14.5px}
 .tabs .ic{font-size:16px;line-height:1}
 .tabs button.on{color:var(--neon)}
 .tabs button.on .ic{text-shadow:0 0 12px rgba(34,228,200,.7)}
+
+.banker-pick{display:block;margin-bottom:14px}
+.banker-pick>span{display:block;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+.banker-pick select{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;font-size:15px}
+
+.gone-list{display:flex;flex-direction:column;gap:7px}
+.gone{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.03);
+  border:1px solid var(--line);border-radius:12px;padding:9px 11px;opacity:.85}
+.gone-main{flex:1;min-width:0}
+.gone-main b{display:block;font-size:13px}
+.gone-main em{font-size:10.5px;color:var(--mut)}
+.gone-net{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--mut)}
+.gone-net.up{color:var(--neon)}
+.gone-net.down{color:var(--crim)}
+.kas{margin-top:9px;font-size:11.5px;color:var(--mut);line-height:1.6;
+  border-left:2px solid var(--gold);padding-left:10px}
+.kas b{font-family:'JetBrains Mono',monospace;color:var(--gold)}
+
+.tally{display:flex;gap:8px;margin-bottom:9px}
+.ty{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:12px 10px;text-align:center}
+.ty b{display:block;font-family:'JetBrains Mono',monospace;font-size:22px;line-height:1.1}
+.ty.wide b{font-size:15px}
+.ty span{display:block;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin-top:5px}
+.ty.up b{color:var(--neon)}
+.ty.down b{color:var(--crim)}
+.ty b.gold{color:var(--gold)}
+.ty b.down{color:var(--crim)}
+
+.standing{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.st-row{display:flex;align-items:center;gap:10px;background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;padding:9px 11px}
+.st-main{flex:1;min-width:0}
+.st-main b{display:block;font-size:13px}
+.st-main em{font-size:10.5px;color:var(--mut)}
+.st-net{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--mut)}
+.st-net.up{color:var(--neon)}
+.st-net.down{color:var(--crim)}
+
+.verdict{border-radius:14px;padding:13px;margin:14px 0 12px;border:1px solid var(--line)}
+.verdict.up{border-color:rgba(34,228,200,.5);background:linear-gradient(180deg,rgba(34,228,200,.10),transparent)}
+.verdict.down{border-color:rgba(255,77,109,.5);background:linear-gradient(180deg,rgba(255,77,109,.10),transparent)}
+.v-head{display:flex;justify-content:space-between;align-items:baseline;
+  font-family:'Chakra Petch';font-size:11.5px;letter-spacing:.18em;color:var(--mut)}
+.v-head b{font-family:'JetBrains Mono',monospace;font-size:19px;letter-spacing:0}
+.verdict.up .v-head b{color:var(--neon)}
+.verdict.down .v-head b{color:var(--crim)}
+.verdict p{margin:9px 0 0;font-size:12.5px;line-height:1.6;color:var(--tx)}
+
+.segs.sub button{font-size:11.5px;padding:8px}
+.bigin{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px;font-family:'JetBrains Mono',monospace;font-size:20px;text-align:center;outline:none}
+.sub-note{font-size:11.5px;color:var(--mut);line-height:1.6;margin:8px 0 0}
+.sub-note.center{text-align:center}
+.warn{font-size:12px;color:var(--gold);line-height:1.6;background:rgba(242,193,78,.08);
+  border:1px solid rgba(242,193,78,.3);border-radius:11px;padding:10px 12px;margin:12px 0 0}
 
 .toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%);z-index:70;
   background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px 16px;
